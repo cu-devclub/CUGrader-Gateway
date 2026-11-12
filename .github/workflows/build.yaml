@@ -25,10 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: sha
-        run: |
-          sha=${{ github.event.pull_request.head.sha || github.sha }}
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "short=${sha:0:8}" >> "$GITHUB_OUTPUT" # = Argo CD head_short_sha
+        run: echo "sha=${{ github.event.pull_request.head.sha || github.sha }}" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -45,7 +42,7 @@ jobs:
       - if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
-          URL: https://${{ steps.sha.outputs.short }}-gateway-grader-sit.sittha.net
+          URL: https://pr-${{ github.event.pull_request.number }}-gateway-grader-sit.sittha.net
           SHA: ${{ steps.sha.outputs.sha }}
         run: |
           body=$(printf '### Preview environment\n**%s**\n\nCommit `%s`. Argo CD deploys it within ~2 minutes of this comment. Backends come from SIT.\n' "$URL" "$SHA")
