@@ -1,0 +1,68 @@
+# PR labelled "preview" -> push :<head sha> (Argo CD pr-previews deploys gateway-pr-<n>).
+# Push to main      -> push :<sha> and :latest, bump SIT newTag in CUGrader-infrastructure.
+# Needs secret INFRA_REPO_TOKEN: PAT with contents:write on cu-devclub/CUGrader-infrastructure.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+env:
+  IMAGE: ghcr.io/cu-devclub/cugrader-gateway
+
+jobs:
+  build:
+    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'preview')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write # preview URL comment
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: sha
+        run: echo "sha=${{ github.event.pull_request.head.sha || github.sha }}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.sha.outputs.sha }}
+            ${{ github.event_name == 'push' && format('{0}:latest', env.IMAGE) || '' }}
+      # One comment per PR, edited on every push. URL format comes from CUGrader-infrastructure argocd/pr-previews.yaml.
+      - if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          URL: https://pr-${{ github.event.pull_request.number }}-gateway-grader-sit.sittha.net
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          body=$(printf '### Preview environment\n**%s**\n\nCommit `%s`. Argo CD deploys it within ~2 minutes of this comment. Backends come from SIT.\n' "$URL" "$SHA")
+          gh pr comment ${{ github.event.pull_request.number }} -R ${{ github.repository }} --edit-last --create-if-none --body "$body"
+
+  bump-sit:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: cu-devclub/CUGrader-infrastructure
+          token: ${{ secrets.INFRA_REPO_TOKEN }}
+      - env:
+          SHA: ${{ needs.build.outputs.sha }}
+        run: |
+          f=apps/gateway/overlays/sit/kustomization.yaml
+          sed -i -E "s|(newTag: )[^ ]+|\1${SHA}|" "$f"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -am "chore(gateway): bump sit to ${SHA}" || exit 0
+          git push

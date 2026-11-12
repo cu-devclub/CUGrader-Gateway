@@ -1,0 +1,10 @@
+# Standalone mode: no etcd, no Admin API. Routes come from apisix.yaml baked into the image.
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+
+nginx_config:
+  # Expose to Lua so apisix.yaml can use ${{UPSTREAM_NAMESPACE}}.
+  envs:
+    - UPSTREAM_NAMESPACE
