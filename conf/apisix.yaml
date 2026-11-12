@@ -1,0 +1,51 @@
+# Path convention: /<svc>/<access>/...  ->  upstream <svc> receives /<access>/...
+#   public/  : open to everyone
+#   secure/  : logged-in user only (forward-auth to user service, sets X-User-Id)
+#   private/ : internal only. Blocked here; services call each other via <svc>.<ns>.svc.cluster.local
+# Any other path returns 404.
+# Upstreams resolve to <svc>.<UPSTREAM_NAMESPACE>.svc.cluster.local.
+# UPSTREAM_NAMESPACE = pod namespace (cugrader-sit/uat/production); PR previews point it at cugrader-sit.
+upstreams:
+  - id: user
+    type: roundrobin
+    nodes: # array form: APISIX leaves the unresolved original behind when ${{}} is in a map key
+      - host: "user.${{UPSTREAM_NAMESPACE}}.svc.cluster.local"
+        port: 80
+        weight: 1
+
+routes:
+  # Deny /<any svc>/private/* for every service.
+  - id: deny-private
+    uri: /*
+    priority: 100
+    vars:
+      - ["uri", "~~", "^/[^/]+/private(/|$)"]
+    plugins:
+      fault-injection:
+        abort:
+          http_status: 403
+          body: "forbidden\n"
+
+  - id: user-public
+    uri: /user/public/*
+    upstream_id: user
+    plugins:
+      proxy-rewrite:
+        regex_uri: ["^/user/(.*)", "/$1"]
+        headers:
+          remove: ["X-User-Id"] # never trust client-sent identity
+
+  - id: user-secure
+    uri: /user/secure/*
+    upstream_id: user
+    plugins:
+      proxy-rewrite:
+        regex_uri: ["^/user/(.*)", "/$1"]
+        headers:
+          remove: ["X-User-Id"] # forward-auth sets it from the verify response
+      forward-auth:
+        # Contract: 2xx + X-User-Id header = logged in; anything else is returned to the client.
+        uri: "http://user.${{UPSTREAM_NAMESPACE}}.svc.cluster.local/private/auth/verify"
+        request_headers: ["Authorization", "Cookie"]
+        upstream_headers: ["X-User-Id"]
+#END
